@@ -694,6 +694,7 @@ async function addWater(ml){
     if(entry && data && data.id) entry.id = data.id;
     showToast(offline ? `+${ml} ml salvo (será sincronizado)` : `+${ml} ml registrado`, offline?'wifiOff':'check');
   }catch(err){
+    console.error('Erro ao registrar hidratação:', err);
     // desfaz a atualização otimista se a escrita falhar por um motivo que não seja rede
     DB.hydrationToday -= ml;
     DB.hydrationLog = DB.hydrationLog.filter(r=>r.id!==tempId);
@@ -762,7 +763,7 @@ function openAddMedication(){
       DB.medications.push({ id: data?.id || 'temp-'+Date.now(), nome, dose, horario, tomado:false });
       renderPage();
       showToast(offline ? 'Medicamento salvo (será sincronizado)' : 'Medicamento adicionado', offline?'wifiOff':'check');
-    }catch(err){ showToast('Não foi possível salvar o medicamento'); }
+    }catch(err){ console.error('Erro ao salvar medicamento:', err); showToast('Não foi possível salvar o medicamento'); }
   };
 }
 
@@ -856,7 +857,7 @@ function openAddEvent(){
       DB.agenda.push({ id: row?.id || 'temp-'+Date.now(), titulo, data, hora, tipo });
       renderPage();
       showToast(offline ? 'Compromisso salvo (será sincronizado)' : 'Compromisso adicionado', offline?'wifiOff':'check');
-    }catch(err){ showToast('Não foi possível salvar o compromisso'); }
+    }catch(err){ console.error('Erro ao salvar compromisso:', err); showToast('Não foi possível salvar o compromisso'); }
   };
 }
 
@@ -1030,7 +1031,7 @@ function openAddCaregiver(){
       DB.caregivers.push({ id: data?.id || 'temp-'+Date.now(), nome, email, parentesco, status:'pendente', alertas });
       renderPage();
       showToast(offline ? 'Cuidador salvo (convite será enviado ao sincronizar)' : 'Convite enviado para '+email, offline?'wifiOff':'check');
-    }catch(err){ showToast('Não foi possível salvar o cuidador'); }
+    }catch(err){ console.error('Erro ao salvar cuidador:', err); showToast('Não foi possível salvar o cuidador'); }
   };
 }
 

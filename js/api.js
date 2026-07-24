@@ -38,11 +38,14 @@ export async function signUp({ nome, email, senha }){
   const { data, error } = await supabase.auth.signUp({ email, password: senha });
   if(error) throw error;
   if(data.user){
-    await supabase.from('pacientes').insert({
+    const { error: profileError } = await supabase.from('pacientes').insert({
       id: data.user.id, nome, email,
       meta_hidratacao_diaria: 2000,
       modo_simples: false,
     });
+    if(profileError){
+      throw new Error('Conta criada, mas não foi possível salvar o perfil: ' + profileError.message);
+    }
   }
   return data;
 }
@@ -64,9 +67,19 @@ export function onAuthChange(cb){
 
 // ---------------- PERFIL ----------------
 export async function getProfile(userId){
-  const { data, error } = await supabase.from('pacientes').select('*').eq('id', userId).single();
+  const { data, error } = await supabase.from('pacientes').select('*').eq('id', userId).maybeSingle();
   if(error) throw error;
-  return data;
+  if(data) return data;
+
+  // Perfil não existe (ex: cadastro antigo que falhou antes da correção).
+  // Cria um perfil mínimo agora, usando o e-mail da sessão autenticada.
+  const { data: userData } = await supabase.auth.getUser();
+  const email = userData?.user?.email || '';
+  const { data: created, error: createError } = await supabase.from('pacientes')
+    .insert({ id:userId, nome:email.split('@')[0]||'Paciente', email, meta_hidratacao_diaria:2000, modo_simples:false })
+    .select().single();
+  if(createError) throw new Error('Não foi possível criar seu perfil: ' + createError.message);
+  return created;
 }
 export async function updateProfile(userId, patch){
   return writeWithFallback({ table:'pacientes', action:'update', payload:{ ...patch, atualizado_em:new Date().toISOString() }, match:{ id:userId } });
