@@ -1,0 +1,126 @@
+import { supabase, supabaseConfigured } from './supabaseClient.js';
+import { pushToQueue, trySync, queueSize } from './offlineQueue.js';
+
+function isNetworkError(err){
+  if(!navigator.onLine) return true;
+  const msg = (err && err.message || '').toLowerCase();
+  return ['network','fetch','offline','unavailable','timeout'].some(k => msg.includes(k));
+}
+
+// Executa uma escrita no Supabase; se falhar por rede, guarda na fila offline
+// e devolve um resultado "otimista" para a tela continuar funcionando.
+async function writeWithFallback({ table, action, payload, match }){
+  if(!supabaseConfigured) throw new Error('Supabase não configurado (veja js/config.js)');
+  try {
+    let query = supabase.from(table);
+    let result;
+    if(action==='insert') result = await query.insert(payload).select().single();
+    else if(action==='update') result = await query.update(payload).match(match).select().single();
+    else if(action==='delete') result = await query.delete().match(match);
+    if(result.error) throw result.error;
+    return { data: result.data, offline: false };
+  } catch (err) {
+    if(isNetworkError(err)){
+      pushToQueue({ table, action, payload, match });
+      return { data: { ...match, ...payload }, offline: true };
+    }
+    throw err;
+  }
+}
+
+export function attemptSync(onProgress){
+  return trySync(supabase, onProgress);
+}
+export function pendingCount(){ return queueSize(); }
+
+// ---------------- AUTH ----------------
+export async function signUp({ nome, email, senha }){
+  const { data, error } = await supabase.auth.signUp({ email, password: senha });
+  if(error) throw error;
+  if(data.user){
+    await supabase.from('pacientes').insert({ id: data.user.id, nome, email });
+  }
+  return data;
+}
+export async function signIn({ email, senha }){
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password: senha });
+  if(error) throw error;
+  return data;
+}
+export async function signOut(){
+  await supabase.auth.signOut();
+}
+export async function getSession(){
+  const { data } = await supabase.auth.getSession();
+  return data.session;
+}
+export function onAuthChange(cb){
+  return supabase.auth.onAuthStateChange((_event, session) => cb(session));
+}
+
+// ---------------- PERFIL ----------------
+export async function getProfile(userId){
+  const { data, error } = await supabase.from('pacientes').select('*').eq('id', userId).single();
+  if(error) throw error;
+  return data;
+}
+export async function updateProfile(userId, patch){
+  return writeWithFallback({ table:'pacientes', action:'update', payload:{ ...patch, updated_at:new Date().toISOString() }, match:{ id:userId } });
+}
+
+// ---------------- HIDRATAÇÃO ----------------
+export async function getHydrationLog(userId, sinceISODate){
+  const { data, error } = await supabase.from('hidratacao').select('*')
+    .eq('paciente_id', userId).gte('registrado_em', sinceISODate)
+    .order('registrado_em', { ascending: true });
+  if(error) throw error;
+  return data || [];
+}
+export async function addHydration(userId, ml){
+  return writeWithFallback({ table:'hidratacao', action:'insert', payload:{ paciente_id:userId, ml, registrado_em:new Date().toISOString() } });
+}
+export async function deleteHydration(id, userId){
+  return writeWithFallback({ table:'hidratacao', action:'delete', match:{ id, paciente_id:userId } });
+}
+
+// ---------------- MEDICAMENTOS ----------------
+export async function getMedications(userId){
+  const { data, error } = await supabase.from('medicamentos').select('*').eq('paciente_id', userId).order('horario');
+  if(error) throw error;
+  return data || [];
+}
+export async function addMedication(userId, med){
+  return writeWithFallback({ table:'medicamentos', action:'insert', payload:{ paciente_id:userId, ...med } });
+}
+export async function toggleMedication(id, userId, tomado){
+  return writeWithFallback({ table:'medicamentos', action:'update', payload:{ tomado_hoje: tomado, ultima_atualizacao: new Date().toISOString().slice(0,10) }, match:{ id, paciente_id:userId } });
+}
+export async function deleteMedication(id, userId){
+  return writeWithFallback({ table:'medicamentos', action:'delete', match:{ id, paciente_id:userId } });
+}
+
+// ---------------- AGENDA ----------------
+export async function getAgenda(userId){
+  const { data, error } = await supabase.from('agenda').select('*').eq('paciente_id', userId).order('data');
+  if(error) throw error;
+  return data || [];
+}
+export async function addAgendaEvent(userId, ev){
+  return writeWithFallback({ table:'agenda', action:'insert', payload:{ paciente_id:userId, ...ev } });
+}
+export async function deleteAgendaEvent(id, userId){
+  return writeWithFallback({ table:'agenda', action:'delete', match:{ id, paciente_id:userId } });
+}
+
+// ---------------- CUIDADORES ----------------
+export async function getCaregivers(userId){
+  const { data, error } = await supabase.from('cuidadores').select('*').eq('paciente_id', userId).order('created_at');
+  if(error) throw error;
+  return data || [];
+}
+export async function addCaregiver(userId, caregiver){
+  return writeWithFallback({ table:'cuidadores', action:'insert', payload:{ paciente_id:userId, ...caregiver } });
+}
+export async function deleteCaregiver(id, userId){
+  return writeWithFallback({ table:'cuidadores', action:'delete', match:{ id, paciente_id:userId } });
+}
