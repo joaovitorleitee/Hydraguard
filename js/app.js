@@ -55,26 +55,29 @@ async function loadAllData(){
   const profile = await api.getProfile(uid);
   DB.auth.nome = profile.nome;
   DB.auth.email = profile.email;
-  DB.hydrationGoal = profile.meta_hidratacao_ml;
+  DB.hydrationGoal = profile.meta_hidratacao_diaria;
   DB.simpleMode = profile.modo_simples;
 
   const since = new Date(); since.setDate(since.getDate()-90);
   const hydroRows = await api.getHydrationLog(uid, since.toISOString());
   const byDate = {};
   hydroRows.forEach(r=>{
-    const d = r.registrado_em.slice(0,10);
-    byDate[d] = (byDate[d]||0) + r.ml;
+    const d = r.horario.slice(0,10);
+    byDate[d] = (byDate[d]||0) + r.quantidade;
   });
   const today = dayKey(0);
   DB.hydrationToday = byDate[today] || 0;
   DB.hydrationLog = hydroRows
-    .filter(r=>r.registrado_em.slice(0,10)===today)
-    .map(r=>({ id:r.id, ml:r.ml, hora:new Date(r.registrado_em).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) }));
+    .filter(r=>r.horario.slice(0,10)===today)
+    .map(r=>({ id:r.id, ml:r.quantidade, hora:new Date(r.horario).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) }));
   DB.hydrationHistory = Object.keys(byDate).filter(d=>d!==today).sort()
     .map(d=>({ date:d, ml:byDate[d] }));
 
+  // Medicamentos: "tomado hoje" é resetado se a última marcação foi em outro dia
   DB.medications = (await api.getMedications(uid)).map(m=>({
-    id:m.id, nome:m.nome, dose:m.dose, horario:(m.horario||'').slice(0,5), tomado:m.tomado_hoje,
+    id:m.id, nome:m.nome, dose:m.dosagem,
+    horario:(m.horario||'').slice(0,5),
+    tomado: m.ultima_atualizacao===today ? m.tomado_hoje : false,
   }));
   DB.agenda = (await api.getAgenda(uid)).map(e=>({
     id:e.id, titulo:e.titulo, data:e.data, hora:(e.horario||'').slice(0,5), tipo:e.tipo,
@@ -755,7 +758,7 @@ function openAddMedication(){
     if(!nome || !dose){ showToast('Preencha nome e dose'); return; }
     closeModal();
     try{
-      const { data, offline } = await api.addMedication(DB.auth.id, { nome, dose, horario, tomado_hoje:false });
+      const { data, offline } = await api.addMedication(DB.auth.id, { nome, dosagem: dose, horario, tomado_hoje:false, ultima_atualizacao: dayKey(0) });
       DB.medications.push({ id: data?.id || 'temp-'+Date.now(), nome, dose, horario, tomado:false });
       renderPage();
       showToast(offline ? 'Medicamento salvo (será sincronizado)' : 'Medicamento adicionado', offline?'wifiOff':'check');
@@ -1121,7 +1124,7 @@ function bindPageEvents(){
       if(!val || val<=0){ showToast('Informe um valor válido'); return; }
       DB.hydrationGoal = val; closeModal(); renderPage();
       try{
-        const { offline } = await api.updateProfile(DB.auth.id, { meta_hidratacao_ml: val });
+        const { offline } = await api.updateProfile(DB.auth.id, { meta_hidratacao_diaria: val });
         showToast(offline ? 'Meta salva (será sincronizada)' : 'Meta atualizada', offline?'wifiOff':'check');
       }catch{ showToast('Não foi possível salvar a meta'); }
     };

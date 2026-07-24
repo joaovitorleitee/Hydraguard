@@ -38,7 +38,11 @@ export async function signUp({ nome, email, senha }){
   const { data, error } = await supabase.auth.signUp({ email, password: senha });
   if(error) throw error;
   if(data.user){
-    await supabase.from('pacientes').insert({ id: data.user.id, nome, email });
+    await supabase.from('pacientes').insert({
+      id: data.user.id, nome, email,
+      meta_hidratacao_diaria: 2000,
+      modo_simples: false,
+    });
   }
   return data;
 }
@@ -65,19 +69,23 @@ export async function getProfile(userId){
   return data;
 }
 export async function updateProfile(userId, patch){
-  return writeWithFallback({ table:'pacientes', action:'update', payload:{ ...patch, updated_at:new Date().toISOString() }, match:{ id:userId } });
+  return writeWithFallback({ table:'pacientes', action:'update', payload:{ ...patch, atualizado_em:new Date().toISOString() }, match:{ id:userId } });
 }
 
 // ---------------- HIDRATAÇÃO ----------------
 export async function getHydrationLog(userId, sinceISODate){
   const { data, error } = await supabase.from('hidratacao').select('*')
-    .eq('paciente_id', userId).gte('registrado_em', sinceISODate)
-    .order('registrado_em', { ascending: true });
+    .eq('paciente_id', userId).gte('horario', sinceISODate)
+    .order('horario', { ascending: true });
   if(error) throw error;
   return data || [];
 }
-export async function addHydration(userId, ml){
-  return writeWithFallback({ table:'hidratacao', action:'insert', payload:{ paciente_id:userId, ml, registrado_em:new Date().toISOString() } });
+export async function addHydration(userId, quantidade){
+  const now = new Date();
+  return writeWithFallback({
+    table:'hidratacao', action:'insert',
+    payload:{ paciente_id:userId, quantidade, horario: now.toISOString(), data: now.toISOString().slice(0,10), sincronizado:true },
+  });
 }
 export async function deleteHydration(id, userId){
   return writeWithFallback({ table:'hidratacao', action:'delete', match:{ id, paciente_id:userId } });
@@ -90,7 +98,7 @@ export async function getMedications(userId){
   return data || [];
 }
 export async function addMedication(userId, med){
-  return writeWithFallback({ table:'medicamentos', action:'insert', payload:{ paciente_id:userId, ...med } });
+  return writeWithFallback({ table:'medicamentos', action:'insert', payload:{ paciente_id:userId, dias:[], ativo:true, ...med } });
 }
 export async function toggleMedication(id, userId, tomado){
   return writeWithFallback({ table:'medicamentos', action:'update', payload:{ tomado_hoje: tomado, ultima_atualizacao: new Date().toISOString().slice(0,10) }, match:{ id, paciente_id:userId } });
@@ -106,7 +114,7 @@ export async function getAgenda(userId){
   return data || [];
 }
 export async function addAgendaEvent(userId, ev){
-  return writeWithFallback({ table:'agenda', action:'insert', payload:{ paciente_id:userId, ...ev } });
+  return writeWithFallback({ table:'agenda', action:'insert', payload:{ paciente_id:userId, concluido:false, ...ev } });
 }
 export async function deleteAgendaEvent(id, userId){
   return writeWithFallback({ table:'agenda', action:'delete', match:{ id, paciente_id:userId } });
