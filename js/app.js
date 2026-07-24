@@ -774,6 +774,7 @@ function pageAgenda(){
   return `
     <div class="page-head">
       <div><h1 class="page-title">Agenda</h1><p class="page-sub">Sessões, consultas e exames</p></div>
+      <button class="btn-primary" style="width:auto;padding:11px 18px;display:flex;align-items:center;gap:7px;" id="addEventTopBtn">${icon('plus')} Novo compromisso</button>
     </div>
     <div class="card">
       <div class="cal-head">
@@ -1087,6 +1088,9 @@ function bindPageEvents(){
   });
   const addMedTop = document.getElementById('addMedTopBtn');
   if(addMedTop) addMedTop.onclick = openAddMedication;
+
+  const addEventTop = document.getElementById('addEventTopBtn');
+  if(addEventTop) addEventTop.onclick = openAddEvent;
 
   document.querySelectorAll('[data-cal-day]').forEach(el=>{
     el.onclick = ()=>{ calSelected = el.getAttribute('data-cal-day'); renderPage(); };
