@@ -119,6 +119,10 @@ Toda vez que vocês derem `git push` no `main`, o Vercel republica sozinho.
   pré-visualizar o que o cuidador veria, remover
 - Perfil: editar nome, meta de hidratação, modo simples
 - Modo simples: navegação reduzida e tudo bem maior
+- **Lembretes de hidratação**: paciente configura horários no Perfil; o app
+  verifica a cada 20s e dispara uma notificação do navegador (ou um aviso
+  dentro do próprio app, se a permissão não tiver sido concedida) —
+  funciona enquanto a aba do site estiver aberta, mesmo em segundo plano
 - Resiliência offline básica: se a escrita falhar por falta de internet,
   fica guardada no navegador (`localStorage`) e é reenviada automaticamente
   quando a conexão volta
@@ -136,9 +140,11 @@ Toda vez que vocês derem `git push` no `main`, o Vercel republica sozinho.
 3. **Alertas automáticos (US31).** As preferências de alerta já são
    salvas por cuidador; falta o job agendado (Edge Function + `pg_cron`)
    que checa adesão 1x/dia e dispara e-mail/push quando necessário.
-4. **Notificações de horário de medicamento.** Na web isso usaria a
-   `Notification API` do navegador — diferente do Expo Notifications do
-   app mobile, e só funciona com o site aberto (ou como PWA instalado).
+4. **Lembretes de hidratação com o navegador fechado.** Hoje os lembretes
+   só disparam com a aba aberta (mesmo que em segundo plano). Para
+   funcionar com o navegador fechado ou o app "instalado" (PWA), seria
+   necessário implementar Web Push de verdade: Service Worker + chaves
+   VAPID + uma Edge Function que dispara o push nos horários configurados.
 5. **Offline mais robusto.** A fila atual funciona por aba/navegador
    (localStorage). Se quiserem algo mais próximo do AsyncStorage +
    syncService do app mobile, o próximo passo é migrar para IndexedDB.
