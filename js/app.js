@@ -15,6 +15,7 @@ const ICONS = {
   user:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6.5 8-6.5s8 2.5 8 6.5"/></svg>',
   plus:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   bell:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
+  bellOff:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.7 3a6 6 0 0 1 9.3 5c0 3.6 1 5.8 1.9 7.1M17.6 17H3s3-2 3-9c0-.5.05-1 .15-1.44"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/><path d="M2 2l20 20"/></svg>',
   check:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
   chevronRight:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
   chevronLeft:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>',
@@ -43,6 +44,8 @@ let DB = {
   medications: [],
   agenda: [],
   caregivers: [],
+  reminderTimes: [],     // ex: ['08:00','10:30','13:00']
+  remindersEnabled: false,
 };
 
 function dayKey(offset){
@@ -57,6 +60,8 @@ async function loadAllData(){
   DB.auth.email = profile.email;
   DB.hydrationGoal = profile.meta_hidratacao_diaria;
   DB.simpleMode = profile.modo_simples;
+  DB.reminderTimes = (profile.horarios_lembrete_agua || []).slice().sort();
+  DB.remindersEnabled = !!profile.lembretes_ativos;
 
   const since = new Date(); since.setDate(since.getDate()-90);
   const hydroRows = await api.getHydrationLog(uid, since.toISOString());
@@ -93,6 +98,83 @@ let calCursor = new Date();
 let calSelected = dayKey(0);
 let hidratacaoTab = 'hoje';
 let historicoPeriodo = 'semana';
+
+/* ============================================================
+   LEMBRETES DE HIDRATAÇÃO
+   Funciona enquanto esta aba estiver aberta no navegador (em
+   segundo plano tudo bem, mas não com o navegador fechado — isso
+   exigiria Web Push + Service Worker, ver README).
+   ============================================================ */
+let reminderTimer = null;
+
+function firedTodayKey(){ return 'hydraguard_reminders_fired_'+dayKey(0); }
+function getFiredToday(){
+  try { return JSON.parse(localStorage.getItem(firedTodayKey())) || []; }
+  catch { return []; }
+}
+function markFiredToday(hhmm){
+  const list = getFiredToday();
+  if(!list.includes(hhmm)){
+    list.push(hhmm);
+    localStorage.setItem(firedTodayKey(), JSON.stringify(list));
+  }
+}
+
+function startReminderScheduler(){
+  if(reminderTimer) clearInterval(reminderTimer);
+  reminderTimer = setInterval(checkReminders, 20000); // checa a cada 20s
+  checkReminders();
+}
+function stopReminderScheduler(){
+  if(reminderTimer){ clearInterval(reminderTimer); reminderTimer = null; }
+}
+function checkReminders(){
+  if(!DB.auth || !DB.remindersEnabled || !DB.reminderTimes.length) return;
+  const now = new Date();
+  const hhmm = now.toTimeString().slice(0,5);
+  if(!DB.reminderTimes.includes(hhmm)) return;
+  const already = getFiredToday();
+  if(already.includes(hhmm)) return;
+  markFiredToday(hhmm);
+  fireHydrationReminder(hhmm);
+}
+
+function fireHydrationReminder(hhmm){
+  const pct = Math.min(100, Math.round(DB.hydrationToday/DB.hydrationGoal*100));
+  const title = 'Hora de beber água 💧';
+  const body = `Você já bebeu ${DB.hydrationToday} ml de ${DB.hydrationGoal} ml hoje (${pct}%). Bora manter o ritmo?`;
+
+  if('Notification' in window && Notification.permission === 'granted'){
+    try{
+      const n = new Notification(title, { body, tag:'hydraguard-'+hhmm });
+      n.onclick = ()=>{ window.focus(); n.close(); };
+    }catch(err){
+      console.warn('Falha ao criar notificação do navegador, usando aviso interno', err);
+      showInAppReminder(title, body);
+    }
+  } else {
+    // Sem permissão (ou navegador sem suporte): mostra um aviso chamativo dentro do próprio app
+    showInAppReminder(title, body);
+  }
+}
+
+function showInAppReminder(title, body){
+  openModal(`
+    <div class="modal-head"><h3>${icon('bell')} ${title}</h3><button class="close-btn" onclick="closeModal()">${icon('x')}</button></div>
+    <p style="font-size:14.5px;color:var(--ink-soft);line-height:1.5;margin-bottom:18px;">${body}</p>
+    <button class="btn-primary" id="reminderQuickAddBtn">Registrar 200 ml agora</button>
+  `);
+  document.getElementById('reminderQuickAddBtn').onclick = ()=>{ closeModal(); addWater(200); };
+}
+
+async function requestNotificationPermission(){
+  if(!('Notification' in window)){
+    showToast('Este navegador não suporta notificações');
+    return 'unsupported';
+  }
+  const result = await Notification.requestPermission();
+  return result;
+}
 
 /* ---------- HELPERS ---------- */
 function isOffline(){
@@ -214,6 +296,7 @@ function attachAuthEvents(){
       DB.auth = { id:user.id, nome:'', email:user.email };
       await loadAllData();
       route='home'; authLoading=false; render();
+      startReminderScheduler();
       showToast('Bem-vindo(a) de volta, '+DB.auth.nome.split(' ')[0]+'!','check');
     }catch(err){
       authLoading=false;
@@ -241,6 +324,7 @@ function attachAuthEvents(){
         await loadAllData();
         route='home'; authLoading=false; render();
         showToast('Conta criada! Bem-vindo(a), '+nome.split(' ')[0]+'.','check');
+        startReminderScheduler();
       } else {
         // Projeto com confirmação de e-mail ativada: precisa confirmar antes de logar
         authLoading=false; authMode='login';
@@ -903,6 +987,32 @@ function pagePerfil(){
       </div>
     </div>
 
+    <div class="section-head"><h2>Lembretes de hidratação</h2></div>
+    <div class="card">
+      <p class="card-sub" style="margin-bottom:16px;">Escolha horários do dia para receber um aviso lembrando de beber água. Funciona enquanto esta aba estiver aberta no navegador.</p>
+
+      <div class="simple-toggle" style="margin-bottom:16px;">
+        <div>
+          <div class="settings-label">Ativar lembretes</div>
+          <div style="font-size:12.5px;color:var(--ink-soft);margin-top:2px;">${DB.reminderTimes.length ? `${DB.reminderTimes.length} horário(s) configurado(s)` : 'Nenhum horário configurado ainda'}</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="remindersToggle" ${DB.remindersEnabled?'checked':''}><span class="slider"></span></label>
+      </div>
+
+      ${notifPermissionBanner()}
+
+      <div class="list">
+        ${DB.reminderTimes.length ? DB.reminderTimes.map(t=>`
+          <div class="list-item">
+            <div class="list-item-icon" style="background:var(--primary-light);color:var(--primary-dark);">${icon('bell')}</div>
+            <div class="list-item-body"><p class="list-item-title">${t}</p></div>
+            <button class="close-btn" style="width:30px;height:30px;" data-del-reminder="${t}" aria-label="Remover horário">${icon('trash')}</button>
+          </div>
+        `).join('') : emptyState('bell','Nenhum horário configurado','Adicione um horário para começar a receber lembretes')}
+      </div>
+      <button class="btn-secondary" style="width:100%;margin-top:14px;display:flex;align-items:center;justify-content:center;gap:8px;" id="addReminderBtn">${icon('plus')} Adicionar horário</button>
+    </div>
+
     <div class="section-head"><h2>Cuidador e família</h2></div>
     <div class="card">
       <p class="card-sub" style="margin-bottom:16px;">Convide um familiar por e-mail para acompanhar seu tratamento. Ele poderá ver seus indicadores e receber alertas se algo sair do previsto.</p>
@@ -913,6 +1023,23 @@ function pagePerfil(){
       ${DB.caregivers.length ? `<button class="link-btn" style="width:100%;justify-content:center;margin-top:14px;" id="previewCaregiverBtn">${icon('users')} Ver o que o cuidador enxerga</button>` : ''}
     </div>
   `;
+}
+
+function notifPermissionBanner(){
+  if(!('Notification' in window)){
+    return `<div class="auth-hint" style="background:var(--warn-light);color:#92400E;margin-bottom:16px;">${icon('bellOff')} Este navegador não suporta notificações do sistema. Quando um horário chegar, você ainda vai ver um aviso dentro do próprio app (com a aba aberta).</div>`;
+  }
+  if(Notification.permission === 'granted'){
+    return `<div class="auth-hint" style="background:var(--success-light);color:#166534;margin-bottom:16px;">${icon('check')} Notificações do navegador autorizadas — os avisos vão aparecer mesmo se você estiver em outra aba.</div>`;
+  }
+  if(Notification.permission === 'denied'){
+    return `<div class="auth-hint" style="background:var(--alert-light);color:#991B1B;margin-bottom:16px;">${icon('bellOff')} Notificações bloqueadas nas configurações do navegador. Os avisos ainda vão aparecer dentro do app, mas só enquanto esta tela estiver visível. Para liberar de verdade, mude a permissão nas configurações do site no seu navegador.</div>`;
+  }
+  return `
+    <div class="auth-hint" style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <span>${icon('bell')} Autorize notificações do navegador para os lembretes aparecerem mesmo fora desta aba.</span>
+      <button class="btn-secondary" style="width:auto;padding:8px 14px;" id="askNotifPermBtn">Autorizar</button>
+    </div>`;
 }
 
 function caregiverRow(c){
@@ -1117,6 +1244,56 @@ function bindPageEvents(){
     try{ await api.updateProfile(DB.auth.id, { modo_simples: DB.simpleMode }); }catch{}
   };
 
+  const askNotifPermBtn = document.getElementById('askNotifPermBtn');
+  if(askNotifPermBtn) askNotifPermBtn.onclick = async ()=>{
+    const result = await requestNotificationPermission();
+    renderPage();
+    if(result==='granted') showToast('Notificações autorizadas!', 'check');
+    else if(result==='denied') showToast('Notificações bloqueadas. Você pode mudar isso nas configurações do navegador.');
+  };
+
+  const remindersToggle = document.getElementById('remindersToggle');
+  if(remindersToggle) remindersToggle.onchange = async ()=>{
+    DB.remindersEnabled = remindersToggle.checked;
+    if(DB.remindersEnabled){
+      startReminderScheduler();
+      if('Notification' in window && Notification.permission==='default') await requestNotificationPermission();
+    } else {
+      stopReminderScheduler();
+    }
+    render();
+    showToast(DB.remindersEnabled ? 'Lembretes ativados' : 'Lembretes desativados', 'check');
+    try{ await api.updateProfile(DB.auth.id, { lembretes_ativos: DB.remindersEnabled }); }catch{}
+  };
+
+  const addReminderBtn = document.getElementById('addReminderBtn');
+  if(addReminderBtn) addReminderBtn.onclick = ()=>{
+    openModal(`
+      <div class="modal-head"><h3>Novo horário de lembrete</h3><button class="close-btn" onclick="closeModal()">${icon('x')}</button></div>
+      <div class="field"><label for="reminderTimeInput">Horário</label><input id="reminderTimeInput" type="time" value="09:00"></div>
+      <button class="btn-primary" id="confirmReminderBtn">Adicionar</button>
+    `);
+    document.getElementById('confirmReminderBtn').onclick = async ()=>{
+      const t = document.getElementById('reminderTimeInput').value;
+      if(!t){ showToast('Escolha um horário'); return; }
+      if(DB.reminderTimes.includes(t)){ showToast('Esse horário já está na lista'); return; }
+      DB.reminderTimes = [...DB.reminderTimes, t].sort();
+      closeModal(); renderPage();
+      try{ await api.updateProfile(DB.auth.id, { horarios_lembrete_agua: DB.reminderTimes }); showToast('Horário adicionado', 'check'); }
+      catch(err){ console.error('Erro ao salvar lembrete:', err); showToast('Não foi possível salvar o horário'); }
+    };
+  };
+
+  document.querySelectorAll('[data-del-reminder]').forEach(el=>{
+    el.onclick = async ()=>{
+      const t = el.getAttribute('data-del-reminder');
+      DB.reminderTimes = DB.reminderTimes.filter(x=>x!==t);
+      renderPage();
+      try{ await api.updateProfile(DB.auth.id, { horarios_lembrete_agua: DB.reminderTimes }); }
+      catch(err){ console.error('Erro ao remover lembrete:', err); showToast('Não foi possível remover o horário'); }
+    };
+  });
+
   const editGoalRow = document.getElementById('editGoalRow');
   if(editGoalRow) editGoalRow.onclick = ()=>{
     openModal(`
@@ -1193,6 +1370,7 @@ function bindPageEvents(){
     `);
     document.getElementById('confirmLogout').onclick = async ()=>{
       await api.signOut();
+      stopReminderScheduler();
       DB.auth = null; route='home'; closeModal(); render();
     };
   };
@@ -1212,6 +1390,7 @@ window.closeModal = closeModal;
       DB.auth = { id: session.user.id, nome:'', email: session.user.email };
       await loadAllData();
       route = 'home';
+      startReminderScheduler();
     }
   }catch(err){
     console.warn('Não foi possível restaurar a sessão', err);
